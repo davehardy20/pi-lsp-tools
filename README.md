@@ -147,6 +147,13 @@ If a language server fails to start, check:
 3. The workspace root contains a recognizable project marker (e.g.
    `package.json`, `Cargo.toml`, `go.mod`)
 
+## LSP runtime strategy
+
+See [docs/lsp-runtime-strategy.md](docs/lsp-runtime-strategy.md) for the
+explicit LSP runtime strategy covering server discovery, client lifecycle,
+auto-install, document synchronization, error handling, and cross-package
+coupling notes.
+
 ## Build and test
 
 ```bash

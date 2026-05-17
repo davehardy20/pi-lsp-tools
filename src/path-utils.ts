@@ -195,7 +195,7 @@ export function resolvePath(
  * - Glob-style wildcards (`*` = any sequence, `?` = single char)
  *
  * The pattern itself is resolved the same way as `targetPath` (tilde,
- * absolute, symlink-followedby default) before comparison.
+ * absolute, symlink-followed by default) before comparison.
  */
 export function isPathMatch(
   targetPath: string,
