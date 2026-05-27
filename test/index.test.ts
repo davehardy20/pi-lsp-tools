@@ -1,24 +1,34 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import lspToolsExtension, { __test__ } from "../src/index.js";
-const { formatDiagnostic } = __test__;
-import type { LSPDiagnostic } from "../src/lsp-client.js";
+import { getInstallInstructions } from "../src/lsp-auto-installer.js";
+import type {
+  LSPDiagnostic,
+  LSPDocumentSymbol,
+  LSPLocation,
+  LSPWorkspaceEdit,
+} from "../src/lsp-client.js";
 import {
-  normalizePath,
-  uriToNormalizedPath,
-  pathsEqual,
-} from "../src/path-utils.js";
-import { filterLspEligibleFiles, groupFilesByServerAndWorkspace } from "../src/lsp-utils.js";
-import {
-  findServerForFile,
   findServerForExtension,
-  getMergedServers,
+  findServerForFile,
   getAutoInstallEnabled,
+  getMergedServers,
   resetCache,
 } from "../src/lsp-server-resolver.js";
-import { getInstallInstructions } from "../src/lsp-auto-installer.js";
+import {
+  filterLspEligibleFiles,
+  groupFilesByServerAndWorkspace,
+} from "../src/lsp-utils.js";
+import { normalizePath, pathsEqual, uriToNormalizedPath } from "../src/path-utils.js";
+
+const {
+  formatDiagnostic,
+  formatLimitedDiagnostics,
+  formatLimitedLocations,
+  formatLimitedSymbols,
+  formatRenameReport,
+} = __test__;
 
 // ── Package manifest ───────────────────────────────────────────────────
 
@@ -245,6 +255,283 @@ describe("formatDiagnostic", () => {
   });
 });
 
+// ── Output cap tests ───────────────────────────────────────────────────
+
+describe("LSP output caps", () => {
+  it("caps references while preserving file path, line, and character", () => {
+    const locations: LSPLocation[] = Array.from({ length: 3 }, (_, i) => ({
+      uri: `file:///project/src/file${i}.ts`,
+      range: {
+        start: { line: i + 10, character: i + 2 },
+        end: { line: i + 10, character: i + 5 },
+      },
+    }));
+
+    const result = formatLimitedLocations(locations, 2, 0);
+
+    expect(result.locations).toHaveLength(2);
+    expect(result.total).toBe(3);
+    expect(result.capped).toBe(true);
+    expect(result.text).toContain("/project/src/file0.ts:11:2");
+    expect(result.text).toContain("use limit:0 for all");
+  });
+
+  it("caps diagnostics while preserving path, line, column, severity, and raw recovery", () => {
+    const diagnostics: LSPDiagnostic[] = Array.from({ length: 3 }, (_, i) => ({
+      severity: 1,
+      message: `Problem ${i}`,
+      range: {
+        start: { line: i, character: 1 },
+        end: { line: i, character: 2 },
+      },
+    }));
+
+    const result = formatLimitedDiagnostics("/project/src/app.ts", diagnostics, 1, 0);
+
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.total).toBe(3);
+    expect(result.capped).toBe(true);
+    expect(result.text).toContain("/project/src/app.ts:1:2 [error] Problem 0");
+    expect(result.text).toContain("use maxDiagnostics:0 for all");
+  });
+
+  it("caps symbols using flattened symbol count while preserving names and lines", () => {
+    const symbols: LSPDocumentSymbol[] = [
+      {
+        name: "TopLevel",
+        kind: 12,
+        range: { start: { line: 4, character: 0 }, end: { line: 10, character: 1 } },
+        selectionRange: { start: { line: 4, character: 0 }, end: { line: 4, character: 8 } },
+        children: [
+          {
+            name: "childSymbol",
+            kind: 6,
+            range: { start: { line: 6, character: 2 }, end: { line: 7, character: 3 } },
+            selectionRange: { start: { line: 6, character: 2 }, end: { line: 6, character: 13 } },
+          },
+        ],
+      },
+    ];
+
+    const result = formatLimitedSymbols(symbols, 1, 0);
+
+    expect(result.symbols).toHaveLength(1);
+    expect(result.symbols[0]).toMatchObject({
+      name: "TopLevel",
+      kind: 12,
+      line: 5,
+      childCount: 1,
+    });
+    expect(result.symbols[0]).not.toHaveProperty("children");
+    expect(JSON.stringify(result.symbols)).not.toContain("childSymbol");
+    expect(result.total).toBe(2);
+    expect(result.capped).toBe(true);
+    expect(result.text).toContain("TopLevel (kind:12) - line 5");
+    expect(result.text).toContain("use maxSymbols:0 for all");
+  });
+
+  it("keeps raw symbol subtrees only when both symbol and char caps are disabled", () => {
+    const symbols: LSPDocumentSymbol[] = [
+      {
+        name: "TopLevel",
+        kind: 12,
+        range: { start: { line: 0, character: 0 }, end: { line: 3, character: 1 } },
+        selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 8 } },
+        children: [
+          {
+            name: "childSymbol",
+            kind: 6,
+            range: { start: { line: 1, character: 2 }, end: { line: 2, character: 3 } },
+            selectionRange: { start: { line: 1, character: 2 }, end: { line: 1, character: 13 } },
+          },
+        ],
+      },
+    ];
+
+    const result = formatLimitedSymbols(symbols, 0, 0);
+
+    expect(result.symbols[0]).toHaveProperty("children");
+    expect(JSON.stringify(result.symbols)).toContain("childSymbol");
+  });
+
+  it("bounds symbol details when text is capped by characters", () => {
+    const symbols: LSPDocumentSymbol[] = Array.from({ length: 30 }, (_, i) => ({
+      name: `Symbol${i}`,
+      kind: 12,
+      range: { start: { line: i, character: 0 }, end: { line: i, character: 1 } },
+      selectionRange: { start: { line: i, character: 0 }, end: { line: i, character: 1 } },
+      children: [
+        {
+          name: `nestedChild${i}`,
+          kind: 6,
+          range: { start: { line: i, character: 2 }, end: { line: i, character: 3 } },
+          selectionRange: { start: { line: i, character: 2 }, end: { line: i, character: 3 } },
+        },
+      ],
+    }));
+
+    const result = formatLimitedSymbols(symbols, 0, 180);
+
+    expect(result.cappedByChars).toBe(true);
+    expect(JSON.stringify(result.symbols).length).toBeLessThanOrEqual(180);
+    expect(result.symbols.every((symbol) => !("children" in symbol))).toBe(true);
+  });
+
+  it("bounds symbol details even when text is under maxChars", () => {
+    const symbols: LSPDocumentSymbol[] = Array.from({ length: 3 }, (_, i) => ({
+      name: `S${i}`,
+      kind: 12,
+      range: { start: { line: i, character: 0 }, end: { line: i, character: 1 } },
+      selectionRange: { start: { line: i, character: 0 }, end: { line: i, character: 1 } },
+    }));
+
+    const result = formatLimitedSymbols(symbols, 0, 120);
+
+    expect(result.cappedByChars).toBe(false);
+    expect(result.text.length).toBeLessThanOrEqual(120);
+    expect(JSON.stringify(result.symbols).length).toBeLessThanOrEqual(120);
+    expect(result.symbols.length).toBeLessThan(result.total);
+    expect(result.symbols.every((symbol) => !("children" in symbol))).toBe(true);
+  });
+
+  it("caps long text output with explicit maxChars recovery", () => {
+    const diagnostics: LSPDiagnostic[] = [
+      {
+        severity: 2,
+        message: "x".repeat(200),
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+      },
+    ];
+
+    const result = formatLimitedDiagnostics("/project/src/app.ts", diagnostics, 0, 120);
+
+    expect(result.cappedByChars).toBe(true);
+    expect(result.text.length).toBeLessThanOrEqual(120);
+    expect(result.text).toContain("Use maxChars:0");
+  });
+
+  it("never exceeds very small maxChars when truncation marker is longer than the cap", () => {
+    const diagnostics: LSPDiagnostic[] = [
+      {
+        severity: 2,
+        message: "x".repeat(200),
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+      },
+    ];
+
+    const result = formatLimitedDiagnostics("/project/src/app.ts", diagnostics, 0, 5);
+
+    expect(result.cappedByChars).toBe(true);
+    expect(result.text.length).toBeLessThanOrEqual(5);
+  });
+
+  it("returns compact bounded diagnostic details when output is capped by characters", () => {
+    const longMessage = "diagnostic-detail-".repeat(100);
+    const diagnostics: LSPDiagnostic[] = [
+      {
+        severity: 1,
+        message: longMessage,
+        range: {
+          start: { line: 4, character: 2 },
+          end: { line: 4, character: 3 },
+        },
+      },
+    ];
+
+    const result = formatLimitedDiagnostics("/project/src/app.ts", diagnostics, 0, 120);
+
+    expect(result.cappedByChars).toBe(true);
+    expect(JSON.stringify(result.diagnostics)).not.toContain(longMessage);
+    expect(JSON.stringify(result.diagnostics).length).toBeLessThanOrEqual(120);
+  });
+
+  it("does not return raw large diagnostic details when output is capped by count", () => {
+    const longMessage = "count-capped-diagnostic-detail-".repeat(100);
+    const diagnostics: LSPDiagnostic[] = Array.from({ length: 2 }, (_, i) => ({
+      severity: 1,
+      message: i === 0 ? longMessage : "short",
+      range: {
+        start: { line: i, character: 2 },
+        end: { line: i, character: 3 },
+      },
+    }));
+
+    const result = formatLimitedDiagnostics("/project/src/app.ts", diagnostics, 1, 0);
+
+    expect(result.capped).toBe(true);
+    expect(JSON.stringify(result.diagnostics)).not.toContain(longMessage);
+    expect(JSON.stringify(result.diagnostics)).toContain("count-capped-diagnostic-detail");
+  });
+
+  it("returns raw diagnostic details only when diagnostic and character caps are disabled", () => {
+    const longMessage = "raw-diagnostic-detail-".repeat(100);
+    const diagnostics: LSPDiagnostic[] = [
+      {
+        severity: 1,
+        message: longMessage,
+        range: {
+          start: { line: 4, character: 2 },
+          end: { line: 4, character: 3 },
+        },
+      },
+    ];
+
+    const result = formatLimitedDiagnostics("/project/src/app.ts", diagnostics, 0, 0);
+
+    expect(result.diagnostics).toEqual(diagnostics);
+    expect(JSON.stringify(result.diagnostics)).toContain(longMessage);
+  });
+
+  it("summarizes large rename edits without returning raw workspace edit content", () => {
+    const files = Array.from({ length: 75 }, (_, i) => `/project/src/file-${i}.ts`);
+    const edit: LSPWorkspaceEdit = {
+      changes: Object.fromEntries(
+        files.map((file, i) => [
+          `file://${file}`,
+          [
+            {
+              range: {
+                start: { line: i, character: 0 },
+                end: { line: i, character: 7 },
+              },
+              newText: `RenamedSymbol${i}`,
+            },
+          ],
+        ]),
+      ),
+    };
+    const report = files
+      .map((file) => `  ✓ ${file} (1 edit(s)) ${"verbose-result-detail ".repeat(20)}`)
+      .join("\n");
+
+    const result = formatRenameReport(report, files, edit, 10, 1200);
+    const fullResult = formatRenameReport(report, files, edit, 0, 0);
+
+    expect(result.editsSummary).toMatchObject({
+      totalChangedFiles: 75,
+      totalTextEdits: 75,
+      usesDocumentChanges: false,
+    });
+    expect(result.totalModifiedFiles).toBe(75);
+    expect(result.displayModifiedFiles.length).toBeLessThan(75);
+    expect(result.capped).toBe(true);
+    expect(result.text).toContain("Applied rename edits: 75 edit(s) across 75 file(s)");
+    expect(result.text).toContain("Modified files (75, showing 10)");
+    expect(JSON.stringify(result)).not.toContain("RenamedSymbol74");
+    expect(JSON.stringify(result)).not.toContain("\"changes\"");
+    expect(fullResult.text).toContain("file-74.ts");
+    expect(fullResult.text).toContain("verbose-result-detail");
+    expect(fullResult.displayModifiedFiles).toHaveLength(75);
+    expect(fullResult.capped).toBe(false);
+  });
+});
+
 // ── Path utils tests ───────────────────────────────────────────────────
 
 describe("path-utils", () => {
@@ -283,44 +570,37 @@ describe("lsp-server-resolver", () => {
 
   it("finds typescript server for .ts files", () => {
     const server = findServerForFile("/project/src/index.ts");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("typescript");
+    expect(server?.id).toBe("typescript");
   });
 
   it("finds python server for .py files", () => {
     const server = findServerForFile("/project/main.py");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("python");
+    expect(server?.id).toBe("python");
   });
 
   it("finds rust server for .rs files", () => {
     const server = findServerForFile("/project/src/main.rs");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("rust");
+    expect(server?.id).toBe("rust");
   });
 
   it("finds go server for .go files", () => {
     const server = findServerForFile("/project/main.go");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("go");
+    expect(server?.id).toBe("go");
   });
 
   it("finds bash server for .sh files", () => {
     const server = findServerForFile("/project/script.sh");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("bash");
+    expect(server?.id).toBe("bash");
   });
 
   it("finds yaml server for .yaml files", () => {
     const server = findServerForFile("/project/config.yaml");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("yaml");
+    expect(server?.id).toBe("yaml");
   });
 
   it("finds json server for .json files", () => {
     const server = findServerForFile("/project/package.json");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("json");
+    expect(server?.id).toBe("json");
   });
 
   it("returns undefined for unsupported extensions", () => {
@@ -330,8 +610,7 @@ describe("lsp-server-resolver", () => {
 
   it("finds server by extension string", () => {
     const server = findServerForExtension(".tsx");
-    expect(server).toBeDefined();
-    expect(server!.id).toBe("typescript");
+    expect(server?.id).toBe("typescript");
   });
 
   it("all builtin servers have required fields", () => {
