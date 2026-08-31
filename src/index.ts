@@ -765,13 +765,21 @@ function findLspTools(query: string): LspToolName[] {
 	) {
 		add("lsp_symbols");
 	}
-	const prepareRenamePattern = /\b(prepare|validate|check|can) rename\b/;
-	if (prepareRenamePattern.test(normalized)) {
+	const renameValidationPatterns = [
+		/\b(?:prepare|validate|check)(?:\s+(?:a|the|this))?\s+rename\b/g,
+		/\bcan(?:\s+\w+){0,6}\s+(?:be\s+)?(?:rename|renamed)\b/g,
+	];
+	let renameRemainder = normalized;
+	let hasRenameValidationIntent = false;
+	for (const pattern of renameValidationPatterns) {
+		const next = renameRemainder.replace(pattern, "");
+		hasRenameValidationIntent ||= next !== renameRemainder;
+		renameRemainder = next;
+	}
+	if (hasRenameValidationIntent) {
 		add("lsp_prepare_rename");
 	}
-	if (
-		/\b(rename|renaming)\b/.test(normalized.replace(prepareRenamePattern, ""))
-	) {
+	if (/\b(rename|renamed|renaming)\b/.test(renameRemainder)) {
 		add("lsp_prepare_rename", "lsp_rename");
 	}
 

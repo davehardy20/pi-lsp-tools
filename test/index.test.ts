@@ -220,6 +220,8 @@ describe("lspToolsExtension registration", () => {
     ["document symbols", ["lsp_symbols"]],
     ["symbol", ["lsp_symbols"]],
     ["prepare rename", ["lsp_prepare_rename"]],
+    ["prepare a rename", ["lsp_prepare_rename"]],
+    ["can this symbol be renamed?", ["lsp_prepare_rename"]],
     ["prepare rename and rename", ["lsp_prepare_rename", "lsp_rename"]],
   ])("maps %s to only the required operation", async (query, expected) => {
     const harness = createHarness(["read"]);
