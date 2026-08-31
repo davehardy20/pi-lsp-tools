@@ -4,7 +4,7 @@ Pi package for LSP-powered code navigation: goto definition, find references, di
 
 ## What it adds
 
-On Pi 0.83 or newer, startup exposes one lightweight loader tool:
+On Pi runtimes that provide active-tool APIs, startup exposes one lightweight loader tool:
 
 - `lsp_tool_search` — activates only the LSP operation needed for the task
 
@@ -25,8 +25,8 @@ For example, `lsp_tool_search({ "query": "references" })` activates only
 mutation. Existing active tools from Pi and other extensions are preserved.
 Deferred tools omit system-prompt snippets and guidelines, so activation does
 not change the system prompt. Providers with native deferred-tool support can
-also preserve the cached prompt prefix when adding schemas. Older Pi runtimes
-retain eager availability of all tools as a compatibility fallback.
+also preserve the cached prompt prefix when adding schemas. Runtimes without
+active-tool APIs retain eager availability of all tools as a compatibility fallback.
 
 One command:
 
