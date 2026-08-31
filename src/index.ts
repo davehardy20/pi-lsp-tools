@@ -769,21 +769,18 @@ function findLspTools(query: string): LspToolName[] {
 	) {
 		add("lsp_symbols");
 	}
-	const renameValidationPatterns = [
-		/\b(?:prepare|validate|check|can|whether)\b(?:\s+\w+){0,6}?\s+(?:rename|renamed|renaming)\b/g,
-	];
-	let renameRemainder = normalized;
-	let hasRenameValidationIntent = false;
-	for (const pattern of renameValidationPatterns) {
-		const next = renameRemainder.replace(pattern, "");
-		hasRenameValidationIntent ||= next !== renameRemainder;
-		renameRemainder = next;
-	}
-	if (hasRenameValidationIntent) {
-		add("lsp_prepare_rename");
-	}
-	if (/\b(rename|renamed|renaming)\b/.test(renameRemainder)) {
-		add("lsp_prepare_rename", "lsp_rename");
+	const renameTerms = normalized.match(/\b(rename|renamed|renaming)\b/g) ?? [];
+	if (renameTerms.length > 0) {
+		const hasValidationIntent =
+			/\b(prepare|validate|validation|check|can|whether|safe|safety|possible)\b/.test(
+				normalized,
+			);
+		if (hasValidationIntent) {
+			add("lsp_prepare_rename");
+		}
+		if (!hasValidationIntent || renameTerms.length > 1) {
+			add("lsp_prepare_rename", "lsp_rename");
+		}
 	}
 
 	return matches;
@@ -853,7 +850,7 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 		name: LSP_TOOL_SEARCH,
 		label: "LSP Tool Search",
 		description:
-			"Activate LSP tools for definitions, references, diagnostics, symbols, or safe rename.",
+			"Activate LSP tools for definitions, references, diagnostics, symbols, or rename.",
 		promptSnippet:
 			"Use lsp_tool_search to activate the required LSP operation.",
 		parameters: Type.Object({
