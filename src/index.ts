@@ -763,8 +763,9 @@ function findLspTools(query: string): LspToolName[] {
 		add("lsp_diagnostics");
 	}
 	if (
-		normalized === "symbol" ||
-		/\b(symbols|outline|structure)\b/.test(normalized)
+		/\b(symbols|outline|structure)\b/.test(normalized) ||
+		(/\bsymbol\b/.test(normalized) &&
+			!/\b(rename|renamed|renaming)\b/.test(normalized))
 	) {
 		add("lsp_symbols");
 	}

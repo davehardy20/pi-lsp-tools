@@ -219,6 +219,8 @@ describe("lspToolsExtension registration", () => {
     ["errors and warnings", ["lsp_diagnostics"]],
     ["document symbols", ["lsp_symbols"]],
     ["symbol", ["lsp_symbols"]],
+    ["document symbol", ["lsp_symbols"]],
+    ["find symbol", ["lsp_symbols"]],
     ["prepare rename", ["lsp_prepare_rename"]],
     ["prepare a rename", ["lsp_prepare_rename"]],
     ["can this symbol be renamed?", ["lsp_prepare_rename"]],
