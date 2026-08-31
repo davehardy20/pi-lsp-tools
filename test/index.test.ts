@@ -16,10 +16,7 @@ import {
   getMergedServers,
   resetCache,
 } from "../src/lsp-server-resolver.js";
-import {
-  filterLspEligibleFiles,
-  groupFilesByServerAndWorkspace,
-} from "../src/lsp-utils.js";
+import { filterLspEligibleFiles, groupFilesByServerAndWorkspace } from "../src/lsp-utils.js";
 import { normalizePath, pathsEqual, uriToNormalizedPath } from "../src/path-utils.js";
 
 const {
@@ -58,16 +55,12 @@ describe("pi-lsp-tools package manifest", () => {
   });
 
   it("declares required peer dependencies", () => {
-    expect(packageJson.peerDependencies).toHaveProperty(
-      "@earendil-works/pi-coding-agent",
-    );
+    expect(packageJson.peerDependencies).toHaveProperty("@earendil-works/pi-coding-agent");
     expect(packageJson.peerDependencies).toHaveProperty("typebox");
   });
 
   it("does not import from pi-tui (headless-safe)", () => {
-    expect(packageJson.peerDependencies).not.toHaveProperty(
-      "@earendil-works/pi-tui",
-    );
+    expect(packageJson.peerDependencies).not.toHaveProperty("@earendil-works/pi-tui");
   });
 
   it("declares runtime dependencies for LSP support", () => {
@@ -83,10 +76,7 @@ describe("pi-lsp-tools package manifest", () => {
   });
 
   it("has no imports from ~/.pi shared helpers", () => {
-    const srcDir = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname),
-      "../src",
-    );
+    const srcDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../src");
     const files = fs.readdirSync(srcDir).filter((f) => f.endsWith(".ts"));
     for (const file of files) {
       const content = fs.readFileSync(path.join(srcDir, file), "utf8");
@@ -98,10 +88,7 @@ describe("pi-lsp-tools package manifest", () => {
       const codeImports = importLines.filter(
         (l) => !l.trim().startsWith("//") && !l.trim().startsWith("*"),
       );
-      expect(
-        codeImports,
-        `${file} should not import from shared/`,
-      ).toHaveLength(0);
+      expect(codeImports, `${file} should not import from shared/`).toHaveLength(0);
     }
   });
 });
@@ -122,10 +109,7 @@ describe("lspToolsExtension registration", () => {
   }
 
   function createHarness(initialActive: string[] = []) {
-    const commands: Record<
-      string,
-      { handler: (...args: unknown[]) => Promise<void> }
-    > = {};
+    const commands: Record<string, { handler: (...args: unknown[]) => Promise<void> }> = {};
     const tools = new Map<string, CapturedTool>();
     const handlers: Record<string, (...args: unknown[]) => unknown> = {};
     const active = [...initialActive];
@@ -225,11 +209,7 @@ describe("lspToolsExtension registration", () => {
       matches: ["lsp_find_references"],
       added: ["lsp_find_references"],
     });
-    expect(harness.active).toEqual([
-      "read",
-      "lsp_tool_search",
-      "lsp_find_references",
-    ]);
+    expect(harness.active).toEqual(["read", "lsp_tool_search", "lsp_find_references"]);
   });
 
   it.each([
@@ -240,11 +220,8 @@ describe("lspToolsExtension registration", () => {
     ["document symbols", ["lsp_symbols"]],
     ["symbol", ["lsp_symbols"]],
     ["prepare rename", ["lsp_prepare_rename"]],
-    [
-      "prepare rename and rename",
-      ["lsp_prepare_rename", "lsp_rename"],
-    ],
-  ])("maps %s to the required operation", async (query, expected) => {
+    ["prepare rename and rename", ["lsp_prepare_rename", "lsp_rename"]],
+  ])("maps %s to only the required operation", async (query, expected) => {
     const harness = createHarness(["read"]);
     lspToolsExtension(harness.pi as never);
     harness.handlers.session_start();
@@ -263,27 +240,10 @@ describe("lspToolsExtension registration", () => {
     harness.handlers.session_start();
 
     const loader = harness.tools.get("lsp_tool_search");
-    await loader?.execute(
-      "call-1",
-      { query: "rename symbol" },
-      undefined,
-      undefined,
-      undefined,
-    );
-    await loader?.execute(
-      "call-2",
-      { query: "rename" },
-      undefined,
-      undefined,
-      undefined,
-    );
+    await loader?.execute("call-1", { query: "rename symbol" }, undefined, undefined, undefined);
+    await loader?.execute("call-2", { query: "rename" }, undefined, undefined, undefined);
 
-    expect(harness.active).toEqual([
-      "read",
-      "lsp_tool_search",
-      "lsp_prepare_rename",
-      "lsp_rename",
-    ]);
+    expect(harness.active).toEqual(["read", "lsp_tool_search", "lsp_prepare_rename", "lsp_rename"]);
     expect(harness.activeUpdates).toHaveLength(2);
   });
 
@@ -295,13 +255,7 @@ describe("lspToolsExtension registration", () => {
 
     const result = await harness.tools
       .get("lsp_tool_search")
-      ?.execute(
-        "call-1",
-        { query: "database migrations" },
-        undefined,
-        undefined,
-        undefined,
-      );
+      ?.execute("call-1", { query: "database migrations" }, undefined, undefined, undefined);
 
     expect(result?.details).toEqual({ matches: [], added: [] });
     expect(harness.active).toEqual(before);
@@ -320,13 +274,7 @@ describe("lspToolsExtension registration", () => {
     expect(() => harness.handlers.session_start()).not.toThrow();
     const result = await harness.tools
       .get("lsp_tool_search")
-      ?.execute(
-        "call-1",
-        { query: "references" },
-        undefined,
-        undefined,
-        undefined,
-      );
+      ?.execute("call-1", { query: "references" }, undefined, undefined, undefined);
 
     expect(result?.details).toEqual({
       matches: ["lsp_find_references"],
@@ -677,7 +625,7 @@ describe("LSP output caps", () => {
     expect(result.text).toContain("Applied rename edits: 75 edit(s) across 75 file(s)");
     expect(result.text).toContain("Modified files (75, showing 10)");
     expect(JSON.stringify(result)).not.toContain("RenamedSymbol74");
-    expect(JSON.stringify(result)).not.toContain("\"changes\"");
+    expect(JSON.stringify(result)).not.toContain('"changes"');
     expect(fullResult.text).toContain("file-74.ts");
     expect(fullResult.text).toContain("verbose-result-detail");
     expect(fullResult.displayModifiedFiles).toHaveLength(75);
@@ -694,9 +642,7 @@ describe("path-utils", () => {
   });
 
   it("converts file URIs to paths", () => {
-    expect(uriToNormalizedPath("file:///Users/test/file.ts")).toBe(
-      "/Users/test/file.ts",
-    );
+    expect(uriToNormalizedPath("file:///Users/test/file.ts")).toBe("/Users/test/file.ts");
   });
 
   it("compares paths for equality", () => {
@@ -803,11 +749,7 @@ describe("lsp-utils", () => {
   });
 
   it("groups files by server and workspace", () => {
-    const files = [
-      "/project/src/a.ts",
-      "/project/src/b.ts",
-      "/project/other/c.ts",
-    ];
+    const files = ["/project/src/a.ts", "/project/src/b.ts", "/project/other/c.ts"];
     const groups = groupFilesByServerAndWorkspace(files);
     // All .ts files should map to the same server
     expect(groups.size).toBeGreaterThanOrEqual(1);
@@ -832,21 +774,13 @@ describe("lsp-utils", () => {
 
 describe("lsp-auto-installer", () => {
   it("provides install instructions for known servers", () => {
-    expect(getInstallInstructions("typescript-language-server")).toContain(
-      "npm install -g",
-    );
+    expect(getInstallInstructions("typescript-language-server")).toContain("npm install -g");
     expect(getInstallInstructions("pyright-langserver")).toContain("pyright");
     expect(getInstallInstructions("rust-analyzer")).toContain("rustup");
     expect(getInstallInstructions("gopls")).toContain("go install");
-    expect(getInstallInstructions("bash-language-server")).toContain(
-      "npm install -g",
-    );
-    expect(getInstallInstructions("yaml-language-server")).toContain(
-      "npm install -g",
-    );
-    expect(getInstallInstructions("vscode-json-language-server")).toContain(
-      "npm install -g",
-    );
+    expect(getInstallInstructions("bash-language-server")).toContain("npm install -g");
+    expect(getInstallInstructions("yaml-language-server")).toContain("npm install -g");
+    expect(getInstallInstructions("vscode-json-language-server")).toContain("npm install -g");
   });
 
   it("provides fallback instructions for unknown servers", () => {
@@ -860,10 +794,7 @@ describe("lsp-auto-installer", () => {
 
 describe("package-local boundary", () => {
   it("all source files exist and are non-empty", () => {
-    const srcDir = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname),
-      "../src",
-    );
+    const srcDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../src");
     const expectedFiles = [
       "index.ts",
       "lsp-client.ts",
@@ -887,14 +818,8 @@ describe("package-local boundary", () => {
     ) as { pi?: { extensions?: string[] } };
     const extensions = packageJson.pi?.extensions ?? [];
     for (const ext of extensions) {
-      const extPath = path.resolve(
-        path.dirname(new URL(import.meta.url).pathname),
-        "..",
-        ext,
-      );
-      expect(fs.existsSync(extPath), `extension ${ext} should exist`).toBe(
-        true,
-      );
+      const extPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", ext);
+      expect(fs.existsSync(extPath), `extension ${ext} should exist`).toBe(true);
     }
   });
 });
