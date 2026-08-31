@@ -778,16 +778,26 @@ function findLspTools(query: string): LspToolName[] {
 	return matches;
 }
 
-function supportsDeferredToolActivation(pi: ExtensionAPI): boolean {
+interface DeferredToolActivationApi {
+	getActiveTools?: () => string[];
+	setActiveTools?: (toolNames: string[]) => void;
+}
+
+type ActiveDeferredToolApi = Required<DeferredToolActivationApi>;
+
+function supportsDeferredToolActivation(
+	api: DeferredToolActivationApi,
+): api is ActiveDeferredToolApi {
 	return (
-		typeof pi.getActiveTools === "function" &&
-		typeof pi.setActiveTools === "function"
+		typeof api.getActiveTools === "function" &&
+		typeof api.setActiveTools === "function"
 	);
 }
 
 // ── Extension ──────────────────────────────────────────────────────────
 
 export default function lspToolsExtension(pi: ExtensionAPI) {
+	const deferredTools = pi as DeferredToolActivationApi;
 	// Cleanup on shutdown
 	// stopAllLspClients is narrow: only LSP client processes and the LSP
 	// client cache. It never throws (suppresses stream-destroyed errors),
@@ -798,16 +808,16 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", () => {
-		if (!supportsDeferredToolActivation(pi)) return;
+		if (!supportsDeferredToolActivation(deferredTools)) return;
 
-		const active = pi.getActiveTools();
+		const active = deferredTools.getActiveTools();
 		const next = active.filter((name) => !LSP_TOOL_NAME_SET.has(name));
 		if (!next.includes(LSP_TOOL_SEARCH)) next.push(LSP_TOOL_SEARCH);
 		if (
 			next.length !== active.length ||
 			next.some((name, index) => name !== active[index])
 		) {
-			pi.setActiveTools(next);
+			deferredTools.setActiveTools(next);
 		}
 	});
 
@@ -850,7 +860,7 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 				};
 			}
 
-			if (!supportsDeferredToolActivation(pi)) {
+			if (!supportsDeferredToolActivation(deferredTools)) {
 				return {
 					content: [
 						{
@@ -862,10 +872,12 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 				};
 			}
 
-			const active = pi.getActiveTools();
+			const active = deferredTools.getActiveTools();
 			const activeNames = new Set(active);
 			const added = matches.filter((name) => !activeNames.has(name));
-			if (added.length > 0) pi.setActiveTools([...active, ...added]);
+			if (added.length > 0) {
+				deferredTools.setActiveTools([...active, ...added]);
+			}
 
 			return {
 				content: [
