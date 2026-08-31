@@ -16,10 +16,7 @@ import {
   getMergedServers,
   resetCache,
 } from "../src/lsp-server-resolver.js";
-import {
-  filterLspEligibleFiles,
-  groupFilesByServerAndWorkspace,
-} from "../src/lsp-utils.js";
+import { filterLspEligibleFiles, groupFilesByServerAndWorkspace } from "../src/lsp-utils.js";
 import { normalizePath, pathsEqual, uriToNormalizedPath } from "../src/path-utils.js";
 
 const {
@@ -58,16 +55,12 @@ describe("pi-lsp-tools package manifest", () => {
   });
 
   it("declares required peer dependencies", () => {
-    expect(packageJson.peerDependencies).toHaveProperty(
-      "@earendil-works/pi-coding-agent",
-    );
+    expect(packageJson.peerDependencies).toHaveProperty("@earendil-works/pi-coding-agent");
     expect(packageJson.peerDependencies).toHaveProperty("typebox");
   });
 
   it("does not import from pi-tui (headless-safe)", () => {
-    expect(packageJson.peerDependencies).not.toHaveProperty(
-      "@earendil-works/pi-tui",
-    );
+    expect(packageJson.peerDependencies).not.toHaveProperty("@earendil-works/pi-tui");
   });
 
   it("declares runtime dependencies for LSP support", () => {
@@ -83,10 +76,7 @@ describe("pi-lsp-tools package manifest", () => {
   });
 
   it("has no imports from ~/.pi shared helpers", () => {
-    const srcDir = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname),
-      "../src",
-    );
+    const srcDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../src");
     const files = fs.readdirSync(srcDir).filter((f) => f.endsWith(".ts"));
     for (const file of files) {
       const content = fs.readFileSync(path.join(srcDir, file), "utf8");
@@ -98,10 +88,7 @@ describe("pi-lsp-tools package manifest", () => {
       const codeImports = importLines.filter(
         (l) => !l.trim().startsWith("//") && !l.trim().startsWith("*"),
       );
-      expect(
-        codeImports,
-        `${file} should not import from shared/`,
-      ).toHaveLength(0);
+      expect(codeImports, `${file} should not import from shared/`).toHaveLength(0);
     }
   });
 });
@@ -109,93 +96,218 @@ describe("pi-lsp-tools package manifest", () => {
 // ── Extension registration ─────────────────────────────────────────────
 
 describe("lspToolsExtension registration", () => {
-  it("registers the lsp-status command", () => {
-    const registered = {
-      commands: [] as string[],
-      tools: [] as string[],
-      events: [] as string[],
-    };
+  interface CapturedToolResult {
+    content: Array<{ type: string; text: string }>;
+    details: { matches?: string[]; added?: string[] };
+  }
 
-    const mockPi = {
-      registerCommand: (name: string, _def: unknown) =>
-        registered.commands.push(name),
-      registerTool: (def: { name: string }) =>
-        registered.tools.push(def.name),
-      on: (event: string, _handler: unknown) =>
-        registered.events.push(event),
-      sendMessage: () => undefined,
-    };
+  interface CapturedTool {
+    name: string;
+    promptSnippet?: string;
+    promptGuidelines?: string[];
+    execute: (...args: unknown[]) => Promise<CapturedToolResult>;
+  }
 
-    lspToolsExtension(mockPi as never);
-
-    expect(registered.commands).toContain("lsp-status");
-    expect(registered.events).toContain("session_shutdown");
-  });
-
-  it("registers all six LSP tools", () => {
-    const tools: string[] = [];
-
-    const mockPi = {
-      registerCommand: () => undefined,
-      registerTool: (def: { name: string }) => tools.push(def.name),
-      on: () => undefined,
-      sendMessage: () => undefined,
-    };
-
-    lspToolsExtension(mockPi as never);
-
-    expect(tools).toContain("lsp_goto_definition");
-    expect(tools).toContain("lsp_find_references");
-    expect(tools).toContain("lsp_diagnostics");
-    expect(tools).toContain("lsp_symbols");
-    expect(tools).toContain("lsp_prepare_rename");
-    expect(tools).toContain("lsp_rename");
-    expect(tools).toHaveLength(6);
-  });
-
-  it("lsp-status command sends package metadata", () => {
-    let sentMessage: unknown = null;
-    const mockPi = {
-      registerCommand: () => undefined,
-      registerTool: () => undefined,
-      on: () => undefined,
-      sendMessage: (msg: unknown) => {
-        sentMessage = msg;
-      },
-    };
-
-    lspToolsExtension(mockPi as never);
-
-    // Find the lsp-status command handler and invoke it
+  function createHarness(initialActive: string[] = []) {
     const commands: Record<string, { handler: (...args: unknown[]) => Promise<void> }> = {};
-    const capturingPi = {
-      registerCommand: (name: string, def: { handler: (...args: unknown[]) => Promise<void> }) => {
-        commands[name] = def;
+    const tools = new Map<string, CapturedTool>();
+    const handlers: Record<string, (...args: unknown[]) => unknown> = {};
+    const active = [...initialActive];
+    const activeUpdates: string[][] = [];
+    let sentMessage: unknown = null;
+
+    const pi = {
+      registerCommand: (
+        name: string,
+        definition: { handler: (...args: unknown[]) => Promise<void> },
+      ) => {
+        commands[name] = definition;
       },
-      registerTool: () => undefined,
-      on: () => undefined,
-      sendMessage: (msg: unknown) => {
-        sentMessage = msg;
+      registerTool: (definition: unknown) => {
+        const tool = definition as CapturedTool;
+        tools.set(tool.name, tool);
+        active.push(tool.name);
+      },
+      on: (event: string, handler: (...args: unknown[]) => unknown) => {
+        handlers[event] = handler;
+      },
+      sendMessage: (message: unknown) => {
+        sentMessage = message;
+      },
+      getActiveTools: () => [...active],
+      setActiveTools: (names: string[]) => {
+        active.splice(0, active.length, ...names);
+        activeUpdates.push([...names]);
       },
     };
 
-    lspToolsExtension(capturingPi as never);
+    return {
+      active,
+      activeUpdates,
+      commands,
+      handlers,
+      pi,
+      sentMessage: () => sentMessage,
+      tools,
+    };
+  }
 
-    // Invoke the lsp-status handler
-    const statusCmd = commands["lsp-status"];
-    expect(statusCmd).toBeDefined();
+  it("registers the status command, loader, and six deferred tools", () => {
+    const harness = createHarness();
 
-    sentMessage = null;
-    // Handler is async; call it and check the side effect
-    const voidResult = statusCmd.handler(undefined, undefined);
-    // It may return a Promise; let it settle synchronously for this test
-    expect(voidResult).toBeInstanceOf(Promise);
-    return voidResult.then(() => {
-      expect(sentMessage).not.toBeNull();
-      const msg = sentMessage as { content: string; display: boolean };
-      expect(msg.content).toContain("@davehardy20/pi-lsp-tools");
-      expect(msg.display).toBe(true);
+    lspToolsExtension(harness.pi as never);
+
+    expect(harness.commands).toHaveProperty("lsp-status");
+    expect(harness.handlers).toHaveProperty("session_start");
+    expect(harness.handlers).toHaveProperty("session_shutdown");
+    expect([...harness.tools.keys()]).toEqual(
+      expect.arrayContaining([
+        "lsp_tool_search",
+        "lsp_goto_definition",
+        "lsp_find_references",
+        "lsp_diagnostics",
+        "lsp_symbols",
+        "lsp_prepare_rename",
+        "lsp_rename",
+      ]),
+    );
+    expect(harness.tools).toHaveLength(7);
+
+    const loader = harness.tools.get("lsp_tool_search");
+    expect(loader?.promptSnippet).toBeTruthy();
+    for (const [name, tool] of harness.tools) {
+      if (name === "lsp_tool_search") continue;
+      expect(tool.promptSnippet).toBeUndefined();
+      expect(tool.promptGuidelines).toBeUndefined();
+    }
+  });
+
+  it("starts with only the loader active while preserving other tools", () => {
+    const harness = createHarness(["read", "custom_tool"]);
+    lspToolsExtension(harness.pi as never);
+
+    harness.handlers.session_start();
+
+    expect(harness.active).toEqual(["read", "custom_tool", "lsp_tool_search"]);
+  });
+
+  it("activates only the LSP tool matching the requested operation", async () => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+
+    const loader = harness.tools.get("lsp_tool_search");
+    const result = await loader?.execute(
+      "call-1",
+      { query: "references" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    expect(result?.details).toEqual({
+      matches: ["lsp_find_references"],
+      added: ["lsp_find_references"],
     });
+    expect(harness.active).toEqual(["read", "lsp_tool_search", "lsp_find_references"]);
+  });
+
+  it.each([
+    ["definition", ["lsp_goto_definition"]],
+    ["definitions", ["lsp_goto_definition"]],
+    ["declarations", ["lsp_goto_definition"]],
+    ["errors and warnings", ["lsp_diagnostics"]],
+    ["document symbols", ["lsp_symbols"]],
+    ["symbol", ["lsp_symbols"]],
+    ["document symbol", ["lsp_symbols"]],
+    ["find symbol", ["lsp_symbols"]],
+    ["prepare rename", ["lsp_prepare_rename"]],
+    ["prepare a rename", ["lsp_prepare_rename"]],
+    ["can this symbol be renamed?", ["lsp_prepare_rename"]],
+    ["check if a rename is possible", ["lsp_prepare_rename"]],
+    ["check whether the rename is safe", ["lsp_prepare_rename"]],
+    ["rename validation", ["lsp_prepare_rename"]],
+    ["rename check", ["lsp_prepare_rename"]],
+    ["is this rename safe", ["lsp_prepare_rename"]],
+    ["check if this rename is possible, then apply it", ["lsp_prepare_rename", "lsp_rename"]],
+    ["can you rename this symbol?", ["lsp_prepare_rename", "lsp_rename"]],
+    ["prepare rename and rename", ["lsp_prepare_rename", "lsp_rename"]],
+  ])("maps %s to only the required operation", async (query, expected) => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+
+    const result = await harness.tools
+      .get("lsp_tool_search")
+      ?.execute("call-1", { query }, undefined, undefined, undefined);
+
+    expect(result?.details.matches).toEqual(expected);
+    expect(result?.details.added).toEqual(expected);
+  });
+
+  it("activates prepare-rename with rename and does not duplicate active tools", async () => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+
+    const loader = harness.tools.get("lsp_tool_search");
+    await loader?.execute("call-1", { query: "rename symbol" }, undefined, undefined, undefined);
+    await loader?.execute("call-2", { query: "rename" }, undefined, undefined, undefined);
+
+    expect(harness.active).toEqual(["read", "lsp_tool_search", "lsp_prepare_rename", "lsp_rename"]);
+    expect(harness.activeUpdates).toHaveLength(2);
+  });
+
+  it("reports an unknown capability without changing active tools", async () => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+    const before = [...harness.active];
+
+    const result = await harness.tools
+      .get("lsp_tool_search")
+      ?.execute("call-1", { query: "database migrations" }, undefined, undefined, undefined);
+
+    expect(result?.details).toEqual({ matches: [], added: [] });
+    expect(harness.active).toEqual(before);
+    expect(harness.activeUpdates).toHaveLength(1);
+  });
+
+  it("keeps tools eagerly available when active-tool APIs are absent", async () => {
+    const harness = createHarness(["read"]);
+    const legacyPi = {
+      ...harness.pi,
+      getActiveTools: undefined,
+      setActiveTools: undefined,
+    };
+    lspToolsExtension(legacyPi as never);
+
+    expect(() => harness.handlers.session_start()).not.toThrow();
+    const result = await harness.tools
+      .get("lsp_tool_search")
+      ?.execute("call-1", { query: "references" }, undefined, undefined, undefined);
+
+    expect(result?.details).toEqual({
+      matches: ["lsp_find_references"],
+      added: [],
+    });
+    expect(harness.active).toEqual(
+      expect.arrayContaining(["lsp_tool_search", "lsp_find_references"]),
+    );
+  });
+
+  it("lsp-status command sends package metadata", async () => {
+    const harness = createHarness();
+    lspToolsExtension(harness.pi as never);
+
+    await harness.commands["lsp-status"].handler(undefined, undefined);
+
+    const message = harness.sentMessage() as {
+      content: string;
+      display: boolean;
+    };
+    expect(message.content).toContain("@davehardy20/pi-lsp-tools");
+    expect(message.display).toBe(true);
   });
 });
 
@@ -524,7 +636,7 @@ describe("LSP output caps", () => {
     expect(result.text).toContain("Applied rename edits: 75 edit(s) across 75 file(s)");
     expect(result.text).toContain("Modified files (75, showing 10)");
     expect(JSON.stringify(result)).not.toContain("RenamedSymbol74");
-    expect(JSON.stringify(result)).not.toContain("\"changes\"");
+    expect(JSON.stringify(result)).not.toContain('"changes"');
     expect(fullResult.text).toContain("file-74.ts");
     expect(fullResult.text).toContain("verbose-result-detail");
     expect(fullResult.displayModifiedFiles).toHaveLength(75);
@@ -541,9 +653,7 @@ describe("path-utils", () => {
   });
 
   it("converts file URIs to paths", () => {
-    expect(uriToNormalizedPath("file:///Users/test/file.ts")).toBe(
-      "/Users/test/file.ts",
-    );
+    expect(uriToNormalizedPath("file:///Users/test/file.ts")).toBe("/Users/test/file.ts");
   });
 
   it("compares paths for equality", () => {
@@ -650,11 +760,7 @@ describe("lsp-utils", () => {
   });
 
   it("groups files by server and workspace", () => {
-    const files = [
-      "/project/src/a.ts",
-      "/project/src/b.ts",
-      "/project/other/c.ts",
-    ];
+    const files = ["/project/src/a.ts", "/project/src/b.ts", "/project/other/c.ts"];
     const groups = groupFilesByServerAndWorkspace(files);
     // All .ts files should map to the same server
     expect(groups.size).toBeGreaterThanOrEqual(1);
@@ -679,21 +785,13 @@ describe("lsp-utils", () => {
 
 describe("lsp-auto-installer", () => {
   it("provides install instructions for known servers", () => {
-    expect(getInstallInstructions("typescript-language-server")).toContain(
-      "npm install -g",
-    );
+    expect(getInstallInstructions("typescript-language-server")).toContain("npm install -g");
     expect(getInstallInstructions("pyright-langserver")).toContain("pyright");
     expect(getInstallInstructions("rust-analyzer")).toContain("rustup");
     expect(getInstallInstructions("gopls")).toContain("go install");
-    expect(getInstallInstructions("bash-language-server")).toContain(
-      "npm install -g",
-    );
-    expect(getInstallInstructions("yaml-language-server")).toContain(
-      "npm install -g",
-    );
-    expect(getInstallInstructions("vscode-json-language-server")).toContain(
-      "npm install -g",
-    );
+    expect(getInstallInstructions("bash-language-server")).toContain("npm install -g");
+    expect(getInstallInstructions("yaml-language-server")).toContain("npm install -g");
+    expect(getInstallInstructions("vscode-json-language-server")).toContain("npm install -g");
   });
 
   it("provides fallback instructions for unknown servers", () => {
@@ -707,10 +805,7 @@ describe("lsp-auto-installer", () => {
 
 describe("package-local boundary", () => {
   it("all source files exist and are non-empty", () => {
-    const srcDir = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname),
-      "../src",
-    );
+    const srcDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../src");
     const expectedFiles = [
       "index.ts",
       "lsp-client.ts",
@@ -734,14 +829,8 @@ describe("package-local boundary", () => {
     ) as { pi?: { extensions?: string[] } };
     const extensions = packageJson.pi?.extensions ?? [];
     for (const ext of extensions) {
-      const extPath = path.resolve(
-        path.dirname(new URL(import.meta.url).pathname),
-        "..",
-        ext,
-      );
-      expect(fs.existsSync(extPath), `extension ${ext} should exist`).toBe(
-        true,
-      );
+      const extPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", ext);
+      expect(fs.existsSync(extPath), `extension ${ext} should exist`).toBe(true);
     }
   });
 });

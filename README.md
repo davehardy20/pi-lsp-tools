@@ -4,7 +4,11 @@ Pi package for LSP-powered code navigation: goto definition, find references, di
 
 ## What it adds
 
-Six LSP tools for Pi:
+On Pi runtimes that provide active-tool APIs, startup exposes one lightweight loader tool:
+
+- `lsp_tool_search` — activates only the LSP operation needed for the task
+
+The loader can activate these six tools on demand:
 
 | Tool | Description |
 | --- | --- |
@@ -14,6 +18,15 @@ Six LSP tools for Pi:
 | `lsp_symbols` | List all symbols (functions, classes, variables) in a file |
 | `lsp_prepare_rename` | Check if a symbol can be renamed at a position |
 | `lsp_rename` | Rename a symbol across the workspace (applies changes) |
+
+For example, `lsp_tool_search({ "query": "references" })` activates only
+`lsp_find_references`. A general rename request activates both
+`lsp_prepare_rename` and `lsp_rename` so validation remains available before
+mutation. Existing active tools from Pi and other extensions are preserved.
+Deferred tools omit system-prompt snippets and guidelines, so activation does
+not change the system prompt. Providers with native deferred-tool support can
+also preserve the cached prompt prefix when adding schemas. Runtimes without
+active-tool APIs retain eager availability of all tools as a compatibility fallback.
 
 One command:
 
@@ -164,7 +177,7 @@ npm test
 
 ## Package-local source layout
 
-```
+```text
 src/
 ├── index.ts              # Main extension entrypoint + tool registrations
 ├── lsp-client.ts         # JSON-RPC LSP client (vscode-jsonrpc)

@@ -538,7 +538,8 @@ export function formatRenameReport(
 	);
 	const normalizedMaxChars = normalizeMaxChars(maxChars);
 	const reportLines = report ? report.split("\n") : [];
-	const cappedByCount = normalizedLimit > 0 && reportLines.length > normalizedLimit;
+	const cappedByCount =
+		normalizedLimit > 0 && reportLines.length > normalizedLimit;
 	const displayLines =
 		normalizedLimit > 0 ? reportLines.slice(0, normalizedLimit) : reportLines;
 	const displayModifiedFiles =
@@ -702,9 +703,116 @@ function makeFilePathParams() {
 	});
 }
 
+const LSP_TOOL_SEARCH = "lsp_tool_search";
+const LSP_TOOL_NAMES = [
+	"lsp_goto_definition",
+	"lsp_find_references",
+	"lsp_diagnostics",
+	"lsp_symbols",
+	"lsp_prepare_rename",
+	"lsp_rename",
+] as const;
+
+type LspToolName = (typeof LSP_TOOL_NAMES)[number];
+const LSP_TOOL_NAME_SET = new Set<string>(LSP_TOOL_NAMES);
+
+function normalizeToolSearchQuery(query: string): string {
+	return query
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+function findLspTools(query: string): LspToolName[] {
+	const normalized = normalizeToolSearchQuery(query);
+	if (!normalized) return [];
+
+	const exactTool = LSP_TOOL_NAMES.find(
+		(name) => normalizeToolSearchQuery(name) === normalized,
+	);
+	if (exactTool) {
+		return exactTool === "lsp_rename"
+			? ["lsp_prepare_rename", "lsp_rename"]
+			: [exactTool];
+	}
+
+	const matches: LspToolName[] = [];
+	const add = (...names: LspToolName[]) => {
+		for (const name of names) {
+			if (!matches.includes(name)) matches.push(name);
+		}
+	};
+
+	if (
+		/\b(definition|definitions|defined|declaration|declarations|goto|go to|jump to)\b/.test(
+			normalized,
+		)
+	) {
+		add("lsp_goto_definition");
+	}
+	if (
+		/\b(reference|references|usage|usages|caller|callers)\b/.test(normalized)
+	) {
+		add("lsp_find_references");
+	}
+	if (
+		/\b(diagnostic|diagnostics|error|errors|warning|warnings|problem|problems)\b/.test(
+			normalized,
+		)
+	) {
+		add("lsp_diagnostics");
+	}
+	if (
+		/\b(symbols|outline|structure)\b/.test(normalized) ||
+		(/\bsymbol\b/.test(normalized) &&
+			!/\b(rename|renamed|renaming)\b/.test(normalized))
+	) {
+		add("lsp_symbols");
+	}
+	const renameTerms = normalized.match(/\b(rename|renamed|renaming)\b/g) ?? [];
+	if (renameTerms.length > 0) {
+		const hasValidationIntent =
+			/\b(prepare|validate|validation|check|can|whether|safe|safety|possible)\b/.test(
+				normalized,
+			);
+		const hasExplicitMutationIntent =
+			/\bcan you(?: please)? rename\b|\b(?:apply|perform|execute)(?: (?:the|this|a))? rename\b|\b(?:apply|do) it\b|\bproceed\b|\b(?:then|and) (?:apply|perform|execute|rename|change)\b/.test(
+				normalized,
+			);
+		const isValidationOnly =
+			hasValidationIntent &&
+			!hasExplicitMutationIntent &&
+			renameTerms.length === 1;
+		if (isValidationOnly) {
+			add("lsp_prepare_rename");
+		} else {
+			add("lsp_prepare_rename", "lsp_rename");
+		}
+	}
+
+	return matches;
+}
+
+interface DeferredToolActivationApi {
+	getActiveTools?: () => string[];
+	setActiveTools?: (toolNames: string[]) => void;
+}
+
+type ActiveDeferredToolApi = Required<DeferredToolActivationApi>;
+
+function supportsDeferredToolActivation(
+	api: DeferredToolActivationApi,
+): api is ActiveDeferredToolApi {
+	return (
+		typeof api.getActiveTools === "function" &&
+		typeof api.setActiveTools === "function"
+	);
+}
+
 // ── Extension ──────────────────────────────────────────────────────────
 
 export default function lspToolsExtension(pi: ExtensionAPI) {
+	const deferredTools = pi as DeferredToolActivationApi;
 	// Cleanup on shutdown
 	// stopAllLspClients is narrow: only LSP client processes and the LSP
 	// client cache. It never throws (suppresses stream-destroyed errors),
@@ -712,6 +820,20 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 	// always get a chance to run after /reload.
 	pi.on("session_shutdown", async (_event, ctx) => {
 		await stopAllLspClients(ctx);
+	});
+
+	pi.on("session_start", () => {
+		if (!supportsDeferredToolActivation(deferredTools)) return;
+
+		const active = deferredTools.getActiveTools();
+		const next = active.filter((name) => !LSP_TOOL_NAME_SET.has(name));
+		if (!next.includes(LSP_TOOL_SEARCH)) next.push(LSP_TOOL_SEARCH);
+		if (
+			next.length !== active.length ||
+			next.some((name, index) => name !== active[index])
+		) {
+			deferredTools.setActiveTools(next);
+		}
 	});
 
 	// Status/debug command
@@ -731,15 +853,67 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerTool({
+		name: LSP_TOOL_SEARCH,
+		label: "LSP Tool Search",
+		description:
+			"Activate LSP tools for definitions, references, diagnostics, symbols, or rename.",
+		promptSnippet:
+			"Use lsp_tool_search to activate the required LSP operation.",
+		parameters: Type.Object({
+			query: Type.String({
+				description: "Capability to activate, such as references or rename",
+				maxLength: 200,
+			}),
+		}),
+		async execute(_toolCallId, params) {
+			const matches = findLspTools(params.query);
+			if (matches.length === 0) {
+				return {
+					content: [{ type: "text", text: "No matching LSP tools found." }],
+					details: { matches: [], added: [] },
+				};
+			}
+
+			if (!supportsDeferredToolActivation(deferredTools)) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Matching LSP tools are already available: ${matches.join(", ")}`,
+						},
+					],
+					details: { matches, added: [] },
+				};
+			}
+
+			const active = deferredTools.getActiveTools();
+			const activeNames = new Set(active);
+			const added = matches.filter((name) => !activeNames.has(name));
+			if (added.length > 0) {
+				deferredTools.setActiveTools([...active, ...added]);
+			}
+
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							added.length > 0
+								? `Activated LSP tools: ${added.join(", ")}`
+								: `Matching LSP tools already active: ${matches.join(", ")}`,
+					},
+				],
+				details: { matches, added },
+			};
+		},
+	});
+
 	// Register tools
 	pi.registerTool({
 		name: "lsp_goto_definition",
 		label: "LSP Go to Definition",
 		description: "Jump to where a symbol is defined using LSP.",
-		promptSnippet: "Use lsp_goto_definition to find where a symbol is defined.",
-		promptGuidelines: [
-			"Use lsp_goto_definition over grep when a language server is available for the file type.",
-		],
 		parameters: makeFilePathParams(),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const client = await withLspClient(ctx, params.filePath);
@@ -767,11 +941,6 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 		name: "lsp_find_references",
 		label: "LSP Find References",
 		description: "Find all references to a symbol using LSP.",
-		promptSnippet: "Use lsp_find_references to find all usages of a symbol.",
-		promptGuidelines: [
-			"Use lsp_find_references before refactoring to find all usages of a symbol across the workspace.",
-			"Results are capped at 50 and 6000 characters by default. Use limit:0 and/or maxChars:0 for uncapped raw output only when necessary.",
-		],
 		parameters: Type.Object({
 			...makeFilePathParams().properties,
 			limit: Type.Optional(
@@ -821,11 +990,6 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 		name: "lsp_diagnostics",
 		label: "LSP Diagnostics",
 		description: "Get errors and warnings for a file using LSP diagnostics.",
-		promptSnippet: "Use lsp_diagnostics to check for errors before building.",
-		promptGuidelines: [
-			"Use lsp_diagnostics to check for errors before running build or test commands.",
-			"Diagnostics are capped at 100 and 6000 characters by default. Use maxDiagnostics:0 and/or maxChars:0 for uncapped raw output only when needed.",
-		],
 		parameters: Type.Object({
 			filePath: Type.String({ description: "Path to the file to check" }),
 			maxDiagnostics: Type.Optional(
@@ -875,11 +1039,6 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 		name: "lsp_symbols",
 		label: "LSP Document Symbols",
 		description: "List all symbols (functions, classes, variables) in a file.",
-		promptSnippet: "Use lsp_symbols to explore the structure of a file.",
-		promptGuidelines: [
-			"Use lsp_symbols to explore the structure of a file when you need to understand its organization.",
-			"Symbols are capped at 200 and 6000 characters by default while preserving names and line numbers. Use maxSymbols:0 and/or maxChars:0 for raw output.",
-		],
 		parameters: Type.Object({
 			filePath: Type.String({ description: "Path to the file to analyze" }),
 			maxSymbols: Type.Optional(
@@ -928,11 +1087,6 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 		label: "LSP Prepare Rename",
 		description:
 			"Check if a symbol can be renamed at a position. Use BEFORE lsp_rename.",
-		promptSnippet:
-			"Use lsp_prepare_rename to validate a rename before applying it.",
-		promptGuidelines: [
-			"Always use lsp_prepare_rename before lsp_rename to validate that a rename is safe at the target position.",
-		],
 		parameters: makeFilePathParams(),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const client = await withLspClient(ctx, params.filePath);
@@ -959,10 +1113,6 @@ export default function lspToolsExtension(pi: ExtensionAPI) {
 		label: "LSP Rename",
 		description:
 			"Rename a symbol across the workspace using LSP. APPLIES changes.",
-		promptSnippet: "Use lsp_rename to rename symbols across files.",
-		promptGuidelines: [
-			"Use lsp_rename for safe cross-file symbol renaming after validating with lsp_prepare_rename.",
-		],
 		parameters: Type.Object({
 			...makeFilePathParams().properties,
 			newName: Type.String({ description: "New symbol name" }),

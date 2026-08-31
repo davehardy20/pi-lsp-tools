@@ -9,7 +9,7 @@ with the Pi extension runtime.
 
 ## Architecture
 
-```
+```text
 ┌─────────────┐     ┌──────────────┐     ┌──────────────────┐
 │  Pi tools   │────▶│  lsp-service  │────▶│  lsp-server-     │
 │  (index.ts) │     │  (cache mgr)  │     │  resolver.ts     │
@@ -32,11 +32,34 @@ with the Pi extension runtime.
 | --- | --- |
 | `index.ts` | Extension entrypoint. Registers tools, commands, and lifecycle hooks. |
 | `lsp-client.ts` | Manages JSON-RPC communication with a single language server process via `vscode-jsonrpc`. |
-| `lsp-service.ts` | Owns the client cache (`Map<serverId:root, LSPClient>`). Handles startup, deduplication, and shutdown orchestration. |
+| `lsp-service.ts` | Owns the client cache; deduplicates startup and orchestrates shutdown. |
 | `lsp-server-resolver.ts` | Maps file extensions to server commands. Reads `~/.pi/lsp-config.yaml` for overrides. |
 | `lsp-auto-installer.ts` | Attempts to install missing language server binaries. Falls back gracefully. |
 | `lsp-utils.ts` | File filtering and grouping by server/workspace. Used by post-turn-linter too. |
 | `path-utils.ts` | Path normalization, URI conversion, and comparison utilities. |
+
+## Deferred tool activation
+
+The extension registers all six operational LSP tools but initially leaves them
+inactive. Only `lsp_tool_search` is exposed to the model at session start. A
+search query activates the smallest matching set while preserving Pi built-ins
+and tools owned by other extensions.
+
+Examples:
+
+- `references` activates `lsp_find_references`.
+- `diagnostics` activates `lsp_diagnostics`.
+- `rename` activates both `lsp_prepare_rename` and `lsp_rename`.
+
+Deferred tools intentionally have no `promptSnippet` or `promptGuidelines`.
+Adding one therefore changes only the provider tool list, not the system prompt.
+On providers supporting deferred tools, Pi records the newly active names on the
+loader result and supplies their schemas through the provider's deferred-tool
+protocol without invalidating the cached prompt prefix. Older Pi runtimes that
+lack active-tool APIs retain eager availability as a compatibility fallback.
+
+Tool activation does not start a language server. Server startup remains lazy
+and occurs only when an activated operational tool is executed.
 
 ## Server discovery and resolution
 
@@ -52,6 +75,7 @@ with the Pi extension runtime.
 
 2. **Configuration overrides**: Users can override server commands, add custom
    servers, or disable servers via `~/.pi/lsp-config.yaml`:
+
    ```yaml
    autoInstall: true
    servers:
@@ -137,6 +161,7 @@ The `LSPClient` manages document synchronization:
 - **Version tracking**: Each document gets an incrementing version number.
 
 Before each LSP request (definition, references, etc.), the client:
+
 1. Reads the current file content.
 2. Syncs the document to the language server.
 3. Waits 300ms for diagnostics to settle.
@@ -208,7 +233,7 @@ read once per process lifetime unless explicitly reset.
 
 All LSP runtime code is package-local within `@davehardy20/pi-lsp-tools`:
 
-```
+```text
 src/
 ├── index.ts              # Extension entrypoint + tool registrations
 ├── lsp-client.ts         # JSON-RPC LSP client
@@ -270,6 +295,7 @@ with the UI layer. This makes the package safe for headless Pi usage.
 ## Status/debug
 
 Run `/lsp-status` in Pi to see:
+
 - Package name and version
 - Loaded source path
 
