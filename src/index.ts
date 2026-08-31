@@ -717,7 +717,10 @@ type LspToolName = (typeof LSP_TOOL_NAMES)[number];
 const LSP_TOOL_NAME_SET = new Set<string>(LSP_TOOL_NAMES);
 
 function normalizeToolSearchQuery(query: string): string {
-	return query.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+	return query
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
 }
 
 function findLspTools(query: string): LspToolName[] {
@@ -766,8 +769,7 @@ function findLspTools(query: string): LspToolName[] {
 		add("lsp_symbols");
 	}
 	const renameValidationPatterns = [
-		/\b(?:prepare|validate|check)(?:\s+(?:a|the|this))?\s+rename\b/g,
-		/\bcan(?:\s+\w+){0,6}\s+(?:be\s+)?(?:rename|renamed)\b/g,
+		/\b(?:prepare|validate|check|can|whether)\b(?:\s+\w+){0,6}?\s+(?:rename|renamed|renaming)\b/g,
 	];
 	let renameRemainder = normalized;
 	let hasRenameValidationIntent = false;

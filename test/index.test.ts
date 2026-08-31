@@ -222,6 +222,8 @@ describe("lspToolsExtension registration", () => {
     ["prepare rename", ["lsp_prepare_rename"]],
     ["prepare a rename", ["lsp_prepare_rename"]],
     ["can this symbol be renamed?", ["lsp_prepare_rename"]],
+    ["check if a rename is possible", ["lsp_prepare_rename"]],
+    ["check whether the rename is safe", ["lsp_prepare_rename"]],
     ["prepare rename and rename", ["lsp_prepare_rename", "lsp_rename"]],
   ])("maps %s to only the required operation", async (query, expected) => {
     const harness = createHarness(["read"]);
