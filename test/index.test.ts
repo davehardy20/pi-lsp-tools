@@ -109,93 +109,246 @@ describe("pi-lsp-tools package manifest", () => {
 // ── Extension registration ─────────────────────────────────────────────
 
 describe("lspToolsExtension registration", () => {
-  it("registers the lsp-status command", () => {
-    const registered = {
-      commands: [] as string[],
-      tools: [] as string[],
-      events: [] as string[],
-    };
+  interface CapturedToolResult {
+    content: Array<{ type: string; text: string }>;
+    details: { matches?: string[]; added?: string[] };
+  }
 
-    const mockPi = {
-      registerCommand: (name: string, _def: unknown) =>
-        registered.commands.push(name),
-      registerTool: (def: { name: string }) =>
-        registered.tools.push(def.name),
-      on: (event: string, _handler: unknown) =>
-        registered.events.push(event),
-      sendMessage: () => undefined,
-    };
+  interface CapturedTool {
+    name: string;
+    promptSnippet?: string;
+    promptGuidelines?: string[];
+    execute: (...args: unknown[]) => Promise<CapturedToolResult>;
+  }
 
-    lspToolsExtension(mockPi as never);
-
-    expect(registered.commands).toContain("lsp-status");
-    expect(registered.events).toContain("session_shutdown");
-  });
-
-  it("registers all six LSP tools", () => {
-    const tools: string[] = [];
-
-    const mockPi = {
-      registerCommand: () => undefined,
-      registerTool: (def: { name: string }) => tools.push(def.name),
-      on: () => undefined,
-      sendMessage: () => undefined,
-    };
-
-    lspToolsExtension(mockPi as never);
-
-    expect(tools).toContain("lsp_goto_definition");
-    expect(tools).toContain("lsp_find_references");
-    expect(tools).toContain("lsp_diagnostics");
-    expect(tools).toContain("lsp_symbols");
-    expect(tools).toContain("lsp_prepare_rename");
-    expect(tools).toContain("lsp_rename");
-    expect(tools).toHaveLength(6);
-  });
-
-  it("lsp-status command sends package metadata", () => {
+  function createHarness(initialActive: string[] = []) {
+    const commands: Record<
+      string,
+      { handler: (...args: unknown[]) => Promise<void> }
+    > = {};
+    const tools = new Map<string, CapturedTool>();
+    const handlers: Record<string, (...args: unknown[]) => unknown> = {};
+    const active = [...initialActive];
+    const activeUpdates: string[][] = [];
     let sentMessage: unknown = null;
-    const mockPi = {
-      registerCommand: () => undefined,
-      registerTool: () => undefined,
-      on: () => undefined,
-      sendMessage: (msg: unknown) => {
-        sentMessage = msg;
+
+    const pi = {
+      registerCommand: (
+        name: string,
+        definition: { handler: (...args: unknown[]) => Promise<void> },
+      ) => {
+        commands[name] = definition;
+      },
+      registerTool: (definition: unknown) => {
+        const tool = definition as CapturedTool;
+        tools.set(tool.name, tool);
+        active.push(tool.name);
+      },
+      on: (event: string, handler: (...args: unknown[]) => unknown) => {
+        handlers[event] = handler;
+      },
+      sendMessage: (message: unknown) => {
+        sentMessage = message;
+      },
+      getActiveTools: () => [...active],
+      setActiveTools: (names: string[]) => {
+        active.splice(0, active.length, ...names);
+        activeUpdates.push([...names]);
       },
     };
 
-    lspToolsExtension(mockPi as never);
-
-    // Find the lsp-status command handler and invoke it
-    const commands: Record<string, { handler: (...args: unknown[]) => Promise<void> }> = {};
-    const capturingPi = {
-      registerCommand: (name: string, def: { handler: (...args: unknown[]) => Promise<void> }) => {
-        commands[name] = def;
-      },
-      registerTool: () => undefined,
-      on: () => undefined,
-      sendMessage: (msg: unknown) => {
-        sentMessage = msg;
-      },
+    return {
+      active,
+      activeUpdates,
+      commands,
+      handlers,
+      pi,
+      sentMessage: () => sentMessage,
+      tools,
     };
+  }
 
-    lspToolsExtension(capturingPi as never);
+  it("registers the status command, loader, and six deferred tools", () => {
+    const harness = createHarness();
 
-    // Invoke the lsp-status handler
-    const statusCmd = commands["lsp-status"];
-    expect(statusCmd).toBeDefined();
+    lspToolsExtension(harness.pi as never);
 
-    sentMessage = null;
-    // Handler is async; call it and check the side effect
-    const voidResult = statusCmd.handler(undefined, undefined);
-    // It may return a Promise; let it settle synchronously for this test
-    expect(voidResult).toBeInstanceOf(Promise);
-    return voidResult.then(() => {
-      expect(sentMessage).not.toBeNull();
-      const msg = sentMessage as { content: string; display: boolean };
-      expect(msg.content).toContain("@davehardy20/pi-lsp-tools");
-      expect(msg.display).toBe(true);
+    expect(harness.commands).toHaveProperty("lsp-status");
+    expect(harness.handlers).toHaveProperty("session_start");
+    expect(harness.handlers).toHaveProperty("session_shutdown");
+    expect([...harness.tools.keys()]).toEqual(
+      expect.arrayContaining([
+        "lsp_tool_search",
+        "lsp_goto_definition",
+        "lsp_find_references",
+        "lsp_diagnostics",
+        "lsp_symbols",
+        "lsp_prepare_rename",
+        "lsp_rename",
+      ]),
+    );
+    expect(harness.tools).toHaveLength(7);
+
+    const loader = harness.tools.get("lsp_tool_search");
+    expect(loader?.promptSnippet).toBeTruthy();
+    for (const [name, tool] of harness.tools) {
+      if (name === "lsp_tool_search") continue;
+      expect(tool.promptSnippet).toBeUndefined();
+      expect(tool.promptGuidelines).toBeUndefined();
+    }
+  });
+
+  it("starts with only the loader active while preserving other tools", () => {
+    const harness = createHarness(["read", "custom_tool"]);
+    lspToolsExtension(harness.pi as never);
+
+    harness.handlers.session_start();
+
+    expect(harness.active).toEqual(["read", "custom_tool", "lsp_tool_search"]);
+  });
+
+  it("activates only the LSP tool matching the requested operation", async () => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+
+    const loader = harness.tools.get("lsp_tool_search");
+    const result = await loader?.execute(
+      "call-1",
+      { query: "references" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    expect(result?.details).toEqual({
+      matches: ["lsp_find_references"],
+      added: ["lsp_find_references"],
     });
+    expect(harness.active).toEqual([
+      "read",
+      "lsp_tool_search",
+      "lsp_find_references",
+    ]);
+  });
+
+  it.each([
+    ["definition", ["lsp_goto_definition"]],
+    ["definitions", ["lsp_goto_definition"]],
+    ["declarations", ["lsp_goto_definition"]],
+    ["errors and warnings", ["lsp_diagnostics"]],
+    ["document symbols", ["lsp_symbols"]],
+    ["symbol", ["lsp_symbols"]],
+    ["prepare rename", ["lsp_prepare_rename"]],
+    [
+      "prepare rename and rename",
+      ["lsp_prepare_rename", "lsp_rename"],
+    ],
+  ])("maps %s to the required operation", async (query, expected) => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+
+    const result = await harness.tools
+      .get("lsp_tool_search")
+      ?.execute("call-1", { query }, undefined, undefined, undefined);
+
+    expect(result?.details.matches).toEqual(expected);
+    expect(result?.details.added).toEqual(expected);
+  });
+
+  it("activates prepare-rename with rename and does not duplicate active tools", async () => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+
+    const loader = harness.tools.get("lsp_tool_search");
+    await loader?.execute(
+      "call-1",
+      { query: "rename symbol" },
+      undefined,
+      undefined,
+      undefined,
+    );
+    await loader?.execute(
+      "call-2",
+      { query: "rename" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    expect(harness.active).toEqual([
+      "read",
+      "lsp_tool_search",
+      "lsp_prepare_rename",
+      "lsp_rename",
+    ]);
+    expect(harness.activeUpdates).toHaveLength(2);
+  });
+
+  it("reports an unknown capability without changing active tools", async () => {
+    const harness = createHarness(["read"]);
+    lspToolsExtension(harness.pi as never);
+    harness.handlers.session_start();
+    const before = [...harness.active];
+
+    const result = await harness.tools
+      .get("lsp_tool_search")
+      ?.execute(
+        "call-1",
+        { query: "database migrations" },
+        undefined,
+        undefined,
+        undefined,
+      );
+
+    expect(result?.details).toEqual({ matches: [], added: [] });
+    expect(harness.active).toEqual(before);
+    expect(harness.activeUpdates).toHaveLength(1);
+  });
+
+  it("keeps tools eagerly available when active-tool APIs are absent", async () => {
+    const harness = createHarness(["read"]);
+    const legacyPi = {
+      ...harness.pi,
+      getActiveTools: undefined,
+      setActiveTools: undefined,
+    };
+    lspToolsExtension(legacyPi as never);
+
+    expect(() => harness.handlers.session_start()).not.toThrow();
+    const result = await harness.tools
+      .get("lsp_tool_search")
+      ?.execute(
+        "call-1",
+        { query: "references" },
+        undefined,
+        undefined,
+        undefined,
+      );
+
+    expect(result?.details).toEqual({
+      matches: ["lsp_find_references"],
+      added: [],
+    });
+    expect(harness.active).toEqual(
+      expect.arrayContaining(["lsp_tool_search", "lsp_find_references"]),
+    );
+  });
+
+  it("lsp-status command sends package metadata", async () => {
+    const harness = createHarness();
+    lspToolsExtension(harness.pi as never);
+
+    await harness.commands["lsp-status"].handler(undefined, undefined);
+
+    const message = harness.sentMessage() as {
+      content: string;
+      display: boolean;
+    };
+    expect(message.content).toContain("@davehardy20/pi-lsp-tools");
+    expect(message.display).toBe(true);
   });
 });
 
