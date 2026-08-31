@@ -775,10 +775,17 @@ function findLspTools(query: string): LspToolName[] {
 			/\b(prepare|validate|validation|check|can|whether|safe|safety|possible)\b/.test(
 				normalized,
 			);
-		if (hasValidationIntent) {
+		const hasExplicitMutationIntent =
+			/\bcan you(?: please)? rename\b|\b(?:apply|perform|execute)(?: (?:the|this|a))? rename\b|\b(?:apply|do) it\b|\bproceed\b|\b(?:then|and) (?:apply|perform|execute|rename|change)\b/.test(
+				normalized,
+			);
+		const isValidationOnly =
+			hasValidationIntent &&
+			!hasExplicitMutationIntent &&
+			renameTerms.length === 1;
+		if (isValidationOnly) {
 			add("lsp_prepare_rename");
-		}
-		if (!hasValidationIntent || renameTerms.length > 1) {
+		} else {
 			add("lsp_prepare_rename", "lsp_rename");
 		}
 	}
